@@ -1,0 +1,40 @@
+[package]
+name = "blackbox-metrics"
+version = "0.0.0-UNSTABLE"
+authors = ["Thomas Rampelberg <thomas@saunter.org>"]
+keywords = ["metrics"]
+categories = ["metrics"]
+license = "Apache 2.0"
+repository = "https://github.com/grampelberg/blackbox-metrics"
+edition = "2024"
+
+[dependencies]
+bon = "3.8.2"
+eyre = "0.6.12"
+hashbrown = "0.16.1"
+metrics = "0.24.3"
+metrics-util = "0.20.1"
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["full", "time"] }
+tracing = "0.1.44"
+
+[lints.rust]
+rust-2024-compatibility = "warn"
+keyword-idents = "warn"
+let-underscore = "warn"
+unused-crate-dependencies = "warn"
+unused-imports = "warn"
+unused-must-use = "warn"
+unreachable-pub = "warn"
+missing-debug-implementations = "warn"
+missing-docs = "warn"
+unsafe-op-in-unsafe-fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+cargo = "warn"
+
+missing_panics_doc = { level = "allow", priority = 1 }

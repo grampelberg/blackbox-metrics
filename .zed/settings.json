@@ -1,0 +1,50 @@
+{
+  "languages": {
+    "JSON": {
+      "format_on_save": "on",
+      "formatter": { "language_server": { "name": "oxfmt" } },
+    },
+    "JSONC": {
+      "format_on_save": "on",
+      "formatter": { "language_server": { "name": "oxfmt" } },
+    },
+    "Markdown": {
+      "formatter": {
+        "external": {
+          "command": "prettier",
+          "arguments": ["--stdin-filepath", "{buffer_path}"],
+        },
+      },
+    },
+    "TOML": {
+      "formatter": {
+        "external": {
+          "command": "prettier-pnp",
+          "arguments": [
+            "--quiet",
+            "--pn=toml",
+            "--stdin-filepath",
+            "{buffer_path}",
+          ],
+        },
+      },
+    },
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "check": {
+          "command": "clippy",
+        },
+        "diagnostics": {
+          "experimental": {
+            "enable": true,
+          },
+        },
+        "rustfmt": {
+          "extraArgs": ["+nightly"],
+        },
+      },
+    },
+  },
+}

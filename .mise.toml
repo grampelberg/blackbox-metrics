@@ -1,0 +1,4 @@
+[tools]
+"npm:prettier" = "latest"
+"npm:prettier-plugin-toml" = "latest"
+"npm:prettier-pnp" = "latest"
