@@ -6,21 +6,24 @@ use metrics_util::registry::{AtomicStorage, Registry};
 use crate::{CounterValue, GaugeValue, HistogramValue, MetricsRead};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub enum MetricKind {
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) enum MetricKind {
     Counter,
     Gauge,
     Histogram,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MetricMetadata {
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) struct MetricMetadata {
     target: String,
     level: Level,
     module_path: Option<String>,
 }
 
 impl MetricMetadata {
-    pub fn new(
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn new(
         target: String,
         level: Level,
         module_path: Option<String>,
@@ -33,6 +36,7 @@ impl MetricMetadata {
     }
 }
 
+/// A snapshot of all the metrics in a registry at a point in time.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     counters: HashMap<Key, CounterValue>,
@@ -42,12 +46,15 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    #[allow(clippy::mutable_key_type)]
     pub(crate) fn from_registry_with_metadata(
         registry: &Registry<Key, AtomicStorage>,
         metadata: HashMap<(MetricKind, Key), MetricMetadata>,
     ) -> Self {
-        let mut this = Snapshot::default();
-        this.metadata = metadata;
+        let mut this = Self {
+            metadata,
+            ..Self::default()
+        };
 
         registry
             .get_counter_handles()
@@ -80,8 +87,7 @@ impl Snapshot {
     fn target_for(&self, kind: MetricKind, key: &Key) -> &str {
         self.metadata
             .get(&(kind, key.clone()))
-            .map(|m| m.target.as_str())
-            .unwrap_or("-")
+            .map_or("-", |m| m.target.as_str())
     }
 
     fn row_for(&self, kind: MetricKind, key: &Key) -> Vec<Row> {
@@ -182,6 +188,7 @@ struct Row {
 }
 
 impl Row {
+    #[allow(clippy::missing_const_for_fn)]
     fn new(
         target: String,
         metric: String,
@@ -197,10 +204,10 @@ impl Row {
     }
 
     fn render(&self, target_width: usize, metric_width: usize) -> String {
-        let metric = match self.idx {
-            Some(idx) => format!("{}.{idx}", self.metric),
-            None => self.metric.clone(),
-        };
+        let metric = self.idx.map_or_else(
+            || self.metric.clone(),
+            |idx| format!("{}.{idx}", self.metric),
+        );
 
         format!(
             "{:<target_width$} {:<metric_width$} {}",

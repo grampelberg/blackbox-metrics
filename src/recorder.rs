@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    hash::Hash,
     sync::{Arc, RwLock, atomic::Ordering},
 };
 
@@ -9,12 +10,20 @@ use tokio::time;
 
 use crate::{
     CounterValue, Error, GaugeValue, HistogramValue, MetricsRead, ReadKey,
-    Result,
     dump_guard::DumpGuard,
+    sampler::{Sampler, SamplerOptions},
     snapshot::{MetricKind, MetricMetadata, Snapshot},
 };
 
-#[derive(Clone)]
+/// In-memory `metrics::Recorder`, useful for:
+///
+/// - Debugging - dump either the current state or a snapshot of it at any time.
+///   Particularly useful during shutdown to know what has changed.
+/// - Reporting - expose metrics to users. You can show the current state of the
+///   system, such as rates in the UI.
+/// - Testing - assert that a metric's value is correct, either immediately or
+///   on a deadline.
+#[derive(Clone, Debug)]
 pub struct BlackboxRecorder {
     registry: Arc<Registry<Key, AtomicStorage>>,
     metadata: Arc<RwLock<HashMap<(MetricKind, Key), MetricMetadata>>>,
@@ -22,7 +31,7 @@ pub struct BlackboxRecorder {
 
 impl Default for BlackboxRecorder {
     fn default() -> Self {
-        BlackboxRecorder {
+        Self {
             registry: Arc::new(Registry::atomic()),
             metadata: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -36,6 +45,9 @@ impl Default for BlackboxRecorder {
 // Note: reset can be implemented by `retain_counters` with a callback that
 // always returns false.
 impl BlackboxRecorder {
+    /// Returns all counter values currently known by the recorder.
+    #[must_use]
+    #[allow(clippy::mutable_key_type)]
     pub fn all_counters(&self) -> HashMap<Key, u64> {
         self.registry
             .get_counter_handles()
@@ -46,11 +58,18 @@ impl BlackboxRecorder {
             .collect::<HashMap<_, _>>()
     }
 
+    /// Waits up to one second for a key to match the expected value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Deadline`] if the value did not match before timeout,
+    /// or [`Error::NoKey`] if the key was never observed while polling.
+    #[allow(clippy::future_not_send)]
     pub async fn assert<K: ReadKey>(
         &self,
         key: &K,
         value: K::Value,
-    ) -> Result<()> {
+    ) -> Result<(), Error> {
         on_deadline(|| {
             if self.get(key).ok_or(Error::NoKey)? == value {
                 return Ok(true);
@@ -63,6 +82,9 @@ impl BlackboxRecorder {
         Ok(())
     }
 
+    /// Captures a point-in-time snapshot of all recorded metrics.
+    #[must_use]
+    #[allow(clippy::mutable_key_type)]
     pub fn snapshot(&self) -> Snapshot {
         let metadata = self
             .metadata
@@ -72,8 +94,24 @@ impl BlackboxRecorder {
         Snapshot::from_registry_with_metadata(&self.registry, metadata)
     }
 
+    /// Creates a guard that prints a snapshot when dropped. This can be used to
+    /// log the state of the system at shutdown. Note that `[Drop]` will only
+    /// fire on graceful shutdown. If you're looking for a dump after `ctrl-c`,
+    /// consider using a signal handler.
+    #[must_use]
     pub fn dump(&self) -> DumpGuard {
         DumpGuard::new(self.clone())
+    }
+
+    /// Builds a sampler over this recorder with default options. To define more
+    /// options, use `[Sampler]` directly.
+    #[must_use]
+    pub fn sampler<K>(&self, keys: Vec<K>) -> Sampler<Self, K>
+    where
+        K: ReadKey + Clone + Eq + Hash,
+        K::Value: Clone,
+    {
+        Sampler::new(self.clone(), keys)
     }
 
     fn record_metadata(
@@ -170,9 +208,9 @@ impl Recorder for BlackboxRecorder {
     }
 }
 
-async fn on_deadline<F>(check: F) -> Result<()>
+async fn on_deadline<F>(check: F) -> Result<(), Error>
 where
-    F: Fn() -> Result<bool>,
+    F: Fn() -> Result<bool, Error>,
 {
     let deadline = time::Duration::from_secs(1);
     time::timeout(deadline, async move {
@@ -185,7 +223,7 @@ where
             }
         }
 
-        Ok::<_, Error>(())
+        Ok::<(), Error>(())
     })
     .await
     .map_err(|_| Error::Deadline)??;

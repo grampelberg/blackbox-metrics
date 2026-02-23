@@ -1,11 +1,12 @@
 use crate::BlackboxRecorder;
 
+#[derive(Debug)]
 pub struct DumpGuard {
     recorder: BlackboxRecorder,
 }
 
 impl DumpGuard {
-    pub(crate) fn new(recorder: BlackboxRecorder) -> Self {
+    pub(crate) const fn new(recorder: BlackboxRecorder) -> Self {
         Self { recorder }
     }
 }

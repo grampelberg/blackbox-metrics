@@ -12,6 +12,7 @@ use crate::{
     CounterKey, CounterValue, GaugeKey, HistogramKey, MetricsRead, ReadKey,
 };
 
+/// Configuration for sampler cadence and retained point window.
 #[derive(Clone, Debug, bon::Builder)]
 pub struct SamplerOptions {
     #[builder(default = Duration::from_secs(1))]
@@ -29,41 +30,45 @@ impl Default for SamplerOptions {
     }
 }
 
-impl SamplerOptions {
-    pub fn interval(&self) -> Duration {
-        self.interval
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-}
-
+/// A sampled metric value at a Unix millisecond timestamp.
+#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SamplePoint<V> {
+    /// Timestamp in milliseconds since Unix epoch.
     pub at_ms: u64,
+    /// Sampled value.
     pub value: V,
 }
 
+/// Derived counter statistics for a sampled series.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CounterStats {
+    /// Estimated rate-per-second over the sampled window.
     pub rate: Option<f64>,
+    /// Latest total counter value.
     pub total: CounterValue,
 }
 
+/// A time series with derived statistics.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Series<T, S> {
+    /// Sample points ordered from oldest to newest.
     pub points: Vec<SamplePoint<T>>,
+    /// Aggregate or derived stats for `points`.
     pub stats: S,
 }
 
-#[derive(Clone)]
+type SampleQueue<V> = VecDeque<SamplePoint<V>>;
+type SharedPoints<K, V> = Arc<RwLock<HashMap<K, SampleQueue<V>>>>;
+
+/// Handle for querying sampled values.
+#[derive(Clone, Debug)]
 pub struct SamplerHandle<K, V>
 where
     K: Clone + Eq + Hash,
     V: Clone,
 {
-    points: Arc<RwLock<HashMap<K, VecDeque<SamplePoint<V>>>>>,
+    points: SharedPoints<K, V>,
 }
 
 impl<K, V> SamplerHandle<K, V>
@@ -71,6 +76,8 @@ where
     K: Clone + Eq + Hash,
     V: Clone,
 {
+    /// Returns the latest sampled point for `key`.
+    #[must_use]
     pub fn latest(&self, key: &K) -> Option<SamplePoint<V>> {
         self.points
             .read()
@@ -79,6 +86,8 @@ where
             .and_then(|points| points.back().cloned())
     }
 
+    /// Returns all retained points per key.
+    #[must_use]
     pub fn dump(&self) -> HashMap<K, Vec<SamplePoint<V>>> {
         self.points
             .read()
@@ -92,6 +101,9 @@ where
 }
 
 impl SamplerHandle<CounterKey, CounterValue> {
+    /// Returns full series and basic stats for a counter.
+    #[must_use]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn series(
         &self,
         key: &CounterKey,
@@ -114,27 +126,37 @@ impl SamplerHandle<CounterKey, CounterValue> {
         })
     }
 
+    /// Returns a rate between the two latest points for `key`.
+    #[must_use]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn rate(&self, key: &CounterKey) -> Option<f64> {
         let guard = self.points.read().expect("sampler lock poisoned");
         let points = guard.get(key)?;
+        let latest = points.back()?.clone();
+        let prev = points.get(points.len().checked_sub(2)?)?.clone();
 
-        let latest = points.back()?;
-        let prev = points.get(points.len().checked_sub(2)?)?;
-        Self::rate_from_prev(prev, latest)
+        Self::rate_from_prev(&prev, &latest)
     }
 
+    /// Returns a rate from the earliest point in `window` to the latest point.
+    #[must_use]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn rate_over(&self, key: &CounterKey, window: Duration) -> Option<f64> {
+        let window_ms = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
+
         let guard = self.points.read().expect("sampler lock poisoned");
         let points = guard.get(key)?;
-        let latest = points.back()?;
-
-        let window_ms = window.as_millis() as u64;
+        let latest = points.back()?.clone();
         let cutoff_ms = latest.at_ms.saturating_sub(window_ms);
+        let prev = points
+            .iter()
+            .find(|point| point.at_ms >= cutoff_ms)?
+            .clone();
 
-        let prev = points.iter().find(|point| point.at_ms >= cutoff_ms)?;
-        Self::rate_from_prev(prev, latest)
+        Self::rate_from_prev(&prev, &latest)
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn rate_from_prev(
         prev: &SamplePoint<CounterValue>,
         latest: &SamplePoint<CounterValue>,
@@ -143,7 +165,7 @@ impl SamplerHandle<CounterKey, CounterValue> {
             return None;
         }
 
-        let dt = (latest.at_ms - prev.at_ms) as f64 / 1000.0;
+        let dt = Duration::from_millis(latest.at_ms - prev.at_ms).as_secs_f64();
         if dt <= 0.0 {
             return None;
         }
@@ -153,6 +175,9 @@ impl SamplerHandle<CounterKey, CounterValue> {
     }
 }
 
+/// Automatically samples a set of keys at regular intervals and reports on
+/// statistics for them.
+#[derive(Debug)]
 pub struct Sampler<R, K>
 where
     R: MetricsRead,
@@ -162,7 +187,7 @@ where
     reader: R,
     keys: Vec<K>,
     options: SamplerOptions,
-    points: Arc<RwLock<HashMap<K, VecDeque<SamplePoint<K::Value>>>>>,
+    points: SharedPoints<K, K::Value>,
 }
 
 impl<R, K> Sampler<R, K>
@@ -171,12 +196,14 @@ where
     K: ReadKey + Clone + Eq + Hash,
     K::Value: Clone,
 {
+    /// Constructs a sampler with explicit options.
+    #[must_use]
     pub fn new_with_opts(
         reader: R,
         keys: Vec<K>,
         options: SamplerOptions,
     ) -> Self {
-        let capacity = options.capacity().max(1);
+        let capacity = options.capacity.max(1);
         let mut points = HashMap::new();
         keys.iter().cloned().for_each(|key| {
             points.insert(key, VecDeque::with_capacity(capacity));
@@ -190,15 +217,21 @@ where
         }
     }
 
+    /// Constructs a sampler with default options.
+    #[must_use]
     pub fn new(reader: R, keys: Vec<K>) -> Self {
         Self::new_with_opts(reader, keys, SamplerOptions::default())
     }
 
-    pub fn sample(&self) {
-        let at_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before unix epoch")
-            .as_millis() as u64;
+    #[allow(clippy::significant_drop_tightening)]
+    fn sample(&self) {
+        let at_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before unix epoch")
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
 
         self.keys.iter().cloned().for_each(|key| {
             if let Some(value) = self.reader.get(&key) {
@@ -217,6 +250,12 @@ where
         });
     }
 
+    /// Convert this sampler into a handle that can be used to query it and a
+    /// runner to collect the samples. You can start the runner, for example by:
+    ///
+    /// ```rust
+    /// tokio::spawn(run);
+    /// ```
     pub fn into_runner(
         self,
     ) -> (
@@ -245,6 +284,9 @@ where
     }
 }
 
+/// Convenience alias for sampling counters.
 pub type CounterSampler<R> = Sampler<R, CounterKey>;
+/// Convenience alias for sampling gauges.
 pub type GaugeSampler<R> = Sampler<R, GaugeKey>;
+/// Convenience alias for sampling histograms.
 pub type HistogramSampler<R> = Sampler<R, HistogramKey>;
