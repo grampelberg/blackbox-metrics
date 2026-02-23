@@ -11,7 +11,7 @@ use tokio::time;
 use crate::{
     CounterValue, Error, GaugeValue, HistogramValue, MetricsRead, ReadKey,
     dump_guard::DumpGuard,
-    sampler::{Sampler, SamplerOptions},
+    sampler::Sampler,
     snapshot::{MetricKind, MetricMetadata, Snapshot},
 };
 
@@ -23,6 +23,23 @@ use crate::{
 ///   system, such as rates in the UI.
 /// - Testing - assert that a metric's value is correct, either immediately or
 ///   on a deadline.
+///
+/// # Example
+///
+/// ```rust
+/// use blackbox_metrics::{BlackboxRecorder, KeyExt, MetricsRead};
+/// use metrics::{counter, gauge, with_local_recorder};
+///
+/// let recorder = BlackboxRecorder::default();
+///
+/// with_local_recorder(&recorder, || {
+///     metrics::counter!("requests_total").increment(1);
+///     metrics::gauge!("queue_depth").set(3.0);
+/// });
+///
+/// let key = "requests_total".into_counter();
+/// assert_eq!(recorder.get(&key), Some(1));
+/// ```
 #[derive(Clone, Debug)]
 pub struct BlackboxRecorder {
     registry: Arc<Registry<Key, AtomicStorage>>,
@@ -64,6 +81,27 @@ impl BlackboxRecorder {
     ///
     /// Returns [`Error::Deadline`] if the value did not match before timeout,
     /// or [`Error::NoKey`] if the key was never observed while polling.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use blackbox_metrics::{BlackboxRecorder, KeyExt};
+    /// use metrics::{counter, with_local_recorder};
+    ///
+    /// #[tokio::test]
+    /// async fn asserts_counter_value() {
+    ///     let recorder = BlackboxRecorder::default();
+    ///
+    ///     with_local_recorder(&recorder, || {
+    ///         counter!("requests_total").increment(3);
+    ///     });
+    ///
+    ///     recorder
+    ///         .assert(&"requests_total".into_counter(), 3)
+    ///         .await
+    ///         .unwrap();
+    /// }
+    /// ```
     #[allow(clippy::future_not_send)]
     pub async fn assert<K: ReadKey>(
         &self,

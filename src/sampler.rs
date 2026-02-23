@@ -62,6 +62,34 @@ type SampleQueue<V> = VecDeque<SamplePoint<V>>;
 type SharedPoints<K, V> = Arc<RwLock<HashMap<K, SampleQueue<V>>>>;
 
 /// Handle for querying sampled values.
+///
+/// # Example
+///
+/// ```rust
+/// use std::time::Duration;
+///
+/// use blackbox_metrics::{BlackboxRecorder, KeyExt};
+/// use metrics::{counter, with_local_recorder};
+///
+/// #[tokio::test]
+/// async fn reads_latest_sample() {
+///     let recorder = BlackboxRecorder::default();
+///     let key = "requests_total".into_counter();
+///
+///     let (handle, run) = recorder.sampler(vec![key.clone()]).into_runner();
+///     let worker = tokio::spawn(run);
+///
+///     with_local_recorder(&recorder, || {
+///         counter!("requests_total").increment(1);
+///     });
+///
+///     tokio::time::sleep(Duration::from_millis(1_100)).await;
+///     let latest = handle.latest(&key).expect("sample should exist");
+///     assert!(latest.value >= 1);
+///
+///     worker.abort();
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct SamplerHandle<K, V>
 where
@@ -102,6 +130,38 @@ where
 
 impl SamplerHandle<CounterKey, CounterValue> {
     /// Returns full series and basic stats for a counter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    ///
+    /// use blackbox_metrics::{BlackboxRecorder, KeyExt};
+    /// use metrics::{counter, with_local_recorder};
+    ///
+    /// #[tokio::test]
+    /// async fn samples_and_calculates_series() {
+    ///     let recorder = BlackboxRecorder::default();
+    ///     let key = "requests_total".into_counter();
+    ///     let (handle, run) = recorder.sampler(vec![key.clone()]).into_runner();
+    ///     let worker = tokio::spawn(run);
+    ///
+    ///     for _ in 0..3 {
+    ///         with_local_recorder(&recorder, || {
+    ///             counter!("requests_total").increment(1);
+    ///         });
+    ///         tokio::time::sleep(Duration::from_millis(1_100)).await;
+    ///     }
+    ///
+    ///     let series = handle.series(&key).expect("series should exist");
+    ///     assert!(series.points.len() >= 2);
+    ///     assert!(series.stats.total >= 1);
+    ///     let rate = handle.rate_over(&key, Duration::from_secs(2));
+    ///     assert!(rate.is_some());
+    ///
+    ///     worker.abort();
+    /// }
+    /// ```
     #[must_use]
     #[allow(clippy::significant_drop_tightening)]
     pub fn series(
@@ -253,7 +313,8 @@ where
     /// Convert this sampler into a handle that can be used to query it and a
     /// runner to collect the samples. You can start the runner, for example by:
     ///
-    /// ```rust
+    /// ```rust,no_run
+    /// # let run = async move {};
     /// tokio::spawn(run);
     /// ```
     pub fn into_runner(

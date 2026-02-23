@@ -1,10 +1,10 @@
 [package]
 name = "blackbox-metrics"
-version = "0.0.0-UNSTABLE"
+version = "0.0.1"
 description = "A local, in-process metrics recorder for debugging, reporting and testing"
 authors = ["Thomas Rampelberg <thomas@saunter.org>"]
 keywords = ["metrics"]
-categories = ["metrics"]
+categories = ["development-tools::debugging", "development-tools::testing"]
 license = "Apache-2.0"
 repository = "https://github.com/grampelberg/blackbox-metrics"
 edition = "2024"

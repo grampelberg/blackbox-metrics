@@ -37,6 +37,23 @@ impl MetricMetadata {
 }
 
 /// A snapshot of all the metrics in a registry at a point in time.
+///
+/// # Example
+///
+/// ```rust
+/// use blackbox_metrics::{BlackboxRecorder, KeyExt, MetricsRead};
+/// use metrics::{counter, with_local_recorder};
+///
+/// let recorder = BlackboxRecorder::default();
+///
+/// with_local_recorder(&recorder, || {
+///     counter!("requests_total").increment(2);
+/// });
+///
+/// let snapshot = recorder.snapshot();
+/// println!("{snapshot}");
+/// assert_eq!(snapshot.get(&"requests_total".into_counter()), Some(2));
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     counters: HashMap<Key, CounterValue>,
